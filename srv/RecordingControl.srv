@@ -1,0 +1,24 @@
+# Request message for recording control operations
+# command: "start", "pause", "resume", "cancel", "finish"
+string command
+# recording_id: For pause/resume/cancel/finish commands
+string recording_id
+string scene
+string[] skills
+string organization
+string task_id
+string device_id
+string data_collector_id
+string[] topics
+# compression level: 0=fastest, 1=fast, 2=default, 3=slow, 4=slowest
+int32 compression_level
+# compression type: "none", "lz4", "zstd"
+string compression_type
+---
+# Response message
+bool success
+string message
+# Unique identifier for this recording session
+string recording_id
+# ReductStore bucket name for data retrieval
+string bucket_name
