@@ -39,7 +39,6 @@ class Recorder {
 public:
   Recorder() : nh_("~") {
     Logger::getInstance().set_log_level("debug");
-
     recording_control_srv_ = nh_.advertiseService<
       RecordingControl::Request, RecordingControl::Response>(
       "/recording_control",
@@ -132,7 +131,7 @@ private:
     }
 
     std::string output_file = "/tmp/recording.mcap";
-    writer_ = std::make_unique<Writer>(output_file);
+    writer_ = std::make_unique<Writer>(output_file, "ros1", request.compression_type, request.compression_level);
     COLOG_INFO("Initialized MCAP writer with file: %s", output_file.c_str());
 
     COLOG_INFO("Starting record for %zu topics", request.topics.size());
@@ -217,13 +216,11 @@ private:
             topics_str += ", ";
           topics_str += pending_topics_[i];
         }
-
         COLOG_INFO("Still waiting for %zu topics: [%s]", pending_topics_.size(),
                    topics_str.c_str());
         std::this_thread::sleep_for(std::chrono::seconds(1));
       }
     }
-
     if (pending_topics_.empty()) {
       COLOG_INFO("All topics successfully subscribed!");
     } else if (stop_retry_flag_) {
@@ -246,26 +243,22 @@ private:
     return {true, "stop recording success"};
   }
 
-
   std::tuple<bool, std::string> cancel_record() {
     recording_status_ = RECORDING_STATUS::CANCELED;
     return {false, "cancel recoding success"};
   }
 
-
-  std::unique_ptr<Writer> writer_;
   ros::NodeHandle nh_;
+  std::unique_ptr<Writer> writer_;
 
   ros::ServiceServer recording_control_srv_;
   ros::ServiceServer recording_status_srv_;
 
   RECORDING_STATUS recording_status_ = RECORDING_STATUS::FINISHED;
 
-  // Store subscribers for all topics
   std::unordered_map<std::string, ros::Subscriber> subscribers_;
   ros_babel_fish::IntegratedDescriptionProvider ros_type_info_provider_;
 
-  // For retry subscription logic
   std::vector<std::string> pending_topics_;
   std::thread subscription_retry_thread_;
   std::atomic<bool> stop_retry_flag_{false};

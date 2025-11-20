@@ -17,13 +17,47 @@
 
 #include <cstring>
 #include <unordered_map>
+
+#include "logger.hpp"
 #include "mcap/writer.hpp"
 
 namespace recorder {
 class Writer {
 public:
-  explicit Writer(const std::string & filename) {
-    auto status = writer_.open(filename, mcap::McapWriterOptions{""});
+  explicit Writer(const std::string & filename, const std::string & profile,
+                  const std::string & compress_type, int32_t compress_level) {
+    auto opt = mcap::McapWriterOptions{profile};
+    if (compress_type == "zstd") {
+      opt.compression = mcap::Compression::Zstd;
+    } else if (compress_type == "lz4") {
+      opt.compression = mcap::Compression::Lz4;
+    } else {
+      opt.compression = mcap::Compression::None;
+    }
+
+    switch (compress_level) {
+      case 0:
+        opt.compressionLevel = mcap::CompressionLevel::Fastest;
+        break;
+      case 1:
+        opt.compressionLevel = mcap::CompressionLevel::Fast;
+        break;
+      case 2:
+        opt.compressionLevel = mcap::CompressionLevel::Default;
+        break;
+      case 3:
+        opt.compressionLevel = mcap::CompressionLevel::Slow;
+        break;
+      case 4:
+        opt.compressionLevel = mcap::CompressionLevel::Slowest;
+        break;
+      default:
+        COLOG_WARN("unsupported compression level: %s", compress_level);
+        opt.compressionLevel = mcap::CompressionLevel::Default;
+        break;
+    }
+
+    auto status = writer_.open(filename, opt);
   }
 
   explicit Writer(std::ostream & stream) {
