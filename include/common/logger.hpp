@@ -21,6 +21,8 @@
 #include <cstring>
 #include <cstdio>
 #include <vector>
+#include <iomanip>
+#include <sstream>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <dirent.h>

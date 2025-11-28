@@ -16,10 +16,11 @@
 
 #include <memory>
 #include <string>
+#include <thread>
 
 #include <rclcpp/rclcpp.hpp>
 #include "../../include/ros2/recorder.hpp"
-//#include "rclcpp/executors/multi_threaded_executor.hpp"
+#include "rclcpp/executors/multi_threaded_executor.hpp"
 
 int main(int argc, char ** argv)
 {
@@ -27,7 +28,11 @@ int main(int argc, char ** argv)
 
   RCLCPP_INFO(rclcpp::get_logger("main"), "recorder started");
   const auto recorder = std::make_shared<recorder::Recorder>();
-  rclcpp::spin(recorder);
+  
+  rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);
+  executor.add_node(recorder);
+  executor.spin();
+  
   rclcpp::shutdown();
   return 0;
 }

@@ -15,6 +15,7 @@
 #ifndef CONFIG_H_
 #define CONFIG_H_
 
+#include <cstring>
 #include <string>
 #include <sys/stat.h>
 enum struct RECORDING_STATUS

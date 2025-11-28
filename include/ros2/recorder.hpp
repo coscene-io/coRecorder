@@ -24,16 +24,19 @@
 #include <memory>
 #include <thread>
 #include <atomic>
+#include <chrono>
+#include <iomanip>
+#include <sstream>
 
-#include "common.h"
+#include "common.hpp"
 #include "writer.hpp"
 #include "message_definition.hpp"
 #include "create_generic_subscription.hpp"
 #include "generic_subscription.hpp"
 
 namespace recorder {
-constexpr int64_t DEFAULT_MIN_QOS_DEPTH = 1;
-constexpr int64_t DEFAULT_MAX_QOS_DEPTH = 25;
+constexpr int64_t DEFAULT_MIN_QOS_DEPTH = 100;
+constexpr int64_t DEFAULT_MAX_QOS_DEPTH = 3000;
 constexpr char SCHEMA_ENCODING[] = "ros2msg";
 constexpr char MESSAGE_ENCODING[] = "cdr";
 
@@ -44,6 +47,8 @@ using RecordingStatus = corecorder::srv::RecordingStatus;
 class Recorder : public rclcpp::Node {
 public:
   Recorder() : Node("corecorder") {
+    callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+    
     recording_control_srv_ = this->create_service<RecordingControl>(
       "recording_control", [this](const std::shared_ptr<RecordingControl::Request> request,
                                   std::shared_ptr<RecordingControl::Response> response) {
@@ -64,19 +69,19 @@ public:
       std::shared_ptr<RecordingStatus::Response> response) {
         switch (recording_status_) {
         case RECORDING_STATUS::RECORDING:
-            response.status = "recording";
+            response->status = "recording";
             break;
           case RECORDING_STATUS::FINISHED:
-            response.status = "finished";
+            response->status = "finished";
             break;
           case RECORDING_STATUS::CANCELED:
-            response.status = "cancelled";
+            response->status = "cancelled";
             break;
           case RECORDING_STATUS::PAUSING:
-            response.status = "paused";
+            response->status = "paused";
             break;
           default:
-            response.status = "idle";
+            response->status = "idle";
             break;
         }
       });
@@ -132,8 +137,20 @@ private:
     }
 
     // Initialize writer with output file
-    std::string output_file = "/tmp/recording.mcap";
-    writer_ = std::make_unique<Writer>(output_file);
+    // Generate filename with timestamp: recording_2025-11-21_16-30-45.mcap
+    auto now = std::chrono::system_clock::now();
+    auto time_t_now = std::chrono::system_clock::to_time_t(now);
+    std::tm tm_now;
+    localtime_r(&time_t_now, &tm_now);
+    
+    std::ostringstream oss;
+    oss << "/tmp/recording_"
+        << std::put_time(&tm_now, "%Y-%m-%d_%H-%M-%S")
+        << ".mcap";
+    std::string output_file = oss.str();
+    
+    writer_ = std::make_unique<Writer>(output_file, "ros2", request->compression_type, 
+                                       request->compression_level);
     RCLCPP_INFO(this->get_logger(), "Initialized MCAP writer with file: %s", output_file.c_str());
 
     RCLCPP_INFO(this->get_logger(), "Starting record for %zu topics", request->topics.size());
@@ -195,12 +212,14 @@ private:
 
     depth = std::max(depth, static_cast<size_t>(DEFAULT_MIN_QOS_DEPTH));
     if (depth > DEFAULT_MAX_QOS_DEPTH) {
-      RCLCPP_INFO(
+      RCLCPP_WARN(
         this->get_logger(),
         "Limiting history depth for topic '%s' to %zu (was %zu). You may want to increase "
         "the max_qos_depth parameter value.",
         topic.c_str(), DEFAULT_MAX_QOS_DEPTH, depth);
       depth = DEFAULT_MAX_QOS_DEPTH;
+    } else {
+      RCLCPP_INFO(this->get_logger(), "Using QoS depth %zu for topic '%s'", depth, topic.c_str());
     }
 
     rclcpp::QoS qos{rclcpp::KeepLast(depth)};
@@ -269,6 +288,7 @@ private:
           writer_->add_channel(topic_name, topic_type, MESSAGE_ENCODING);
 
           auto qos = get_qos_from_topic(topic_name);
+#ifdef ROS2_VERSION_FOXY
           auto subscription = create_generic_subscription(
             this->get_node_topics_interface(), topic_name, topic_type, qos,
             [this, topic_name](std::shared_ptr<const rclcpp::SerializedMessage> msg,
@@ -286,6 +306,36 @@ private:
               }
             }
           );
+# else
+          rclcpp::SubscriptionEventCallbacks event_callbacks;
+          event_callbacks.incompatible_qos_callback =
+              [this, topic_name, topic_type](const rclcpp::QOSRequestedIncompatibleQoSInfo &) {
+                COLOG_INFO("Incompatible subscriber QoS settings for topic \"%s\" (%s)",
+                    topic_name.c_str(), topic_type.c_str());
+          };
+
+          rclcpp::SubscriptionOptions subscription_options;
+          subscription_options.event_callbacks = event_callbacks;
+          subscription_options.callback_group = callback_group_;
+
+          auto subscription = this->create_generic_subscription(
+              topic_name, topic_type, qos,
+              [this, topic_name, topic_type](std::shared_ptr<const rclcpp::SerializedMessage> msg) {
+                if (recording_status_ == RECORDING_STATUS::PAUSING) {
+                  return;
+                }
+                const uint64_t recv_time = this->now().nanoseconds();
+                const auto & rcl_msg = msg->get_rcl_serialized_message();
+                const auto status = writer_->write_message(
+                  reinterpret_cast<const std::byte*>(rcl_msg.buffer),
+                  rcl_msg.buffer_length, topic_name, recv_time);
+                if (!status.ok()) {
+                  RCLCPP_WARN(this->get_logger(), "Failed to write [%s] message: '%s'",
+                              topic_name.c_str(), status.message.c_str());
+                }
+              },
+              subscription_options);
+#endif
           subscribers_[topic_name] = subscription;
           RCLCPP_INFO(this->get_logger(), "Successfully subscribed to topic '%s' with type '%s'",
                       topic_name.c_str(), topic_type.c_str());
@@ -321,6 +371,9 @@ private:
   RECORDING_STATUS recording_status_ = RECORDING_STATUS::FINISHED;
   std::unique_ptr<Writer> writer_;
   MessageDefinitionCache message_definition_cache_;
+
+  // Callback group for parallel callback execution
+  rclcpp::CallbackGroup::SharedPtr callback_group_;
 
   // Store subscribers for all topics
   std::unordered_map<std::string, rclcpp::SubscriptionBase::SharedPtr> subscribers_;

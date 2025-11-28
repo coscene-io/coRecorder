@@ -17,15 +17,16 @@
 
 #include <thread>
 #include "ros/ros.h"
+#include <topic_tools/shape_shifter.h>
 
 #include "common.hpp"
 #include "writer.hpp"
 #include "logger.hpp"
+#include "message_definition_cache.hpp"
+
 #include "corecorder/RecordingControl.h"
 #include "corecorder/RecordingStatus.h"
 
-#include <ros_babel_fish/babel_fish_message.h>
-#include <ros_babel_fish/generation/providers/integrated_description_provider.h>
 
 namespace recorder {
 using RecordingControl = corecorder::RecordingControl;
@@ -97,29 +98,29 @@ private:
         recording_status_ == RECORDING_STATUS::FINISHED) {
         return start_record(request);
       }
-      return {false, "can not start record, because of illegal recording status."};
+      return {false, "can not start recording, because of illegal recording status."};
     } else if (request.command == "pause") {
       if (recording_status_ == RECORDING_STATUS::RECORDING) {
         recording_status_ = RECORDING_STATUS::PAUSING;
         return {true, "successes"};
       }
-      return {false, "can not pause, because of illegal recording status."};
+      return {false, "can not pause recording, because of illegal recording status."};
     } else if (request.command == "resume") {
       if (recording_status_ == RECORDING_STATUS::PAUSING) {
         recording_status_ = RECORDING_STATUS::RECORDING;
         return {true, "successes"};
       }
-      return {false, "can not resume, because of illegal recording status."};
+      return {false, "can not resume recording, because of illegal recording status."};
     } else if (request.command == "cancel") {
       if (recording_status_ == RECORDING_STATUS::RECORDING) {
         return cancel_record();
       }
-      return {false, "can not cancel, because of illegal recording status."};
+      return {false, "can not cancel recording, because of illegal recording status."};
     } else if (request.command == "finish") {
       if (recording_status_ == RECORDING_STATUS::RECORDING) {
         return stop_record();
       }
-      return {false, "can not finish, because of illegal recording status."};
+      return {false, "can not finish recording, because of illegal recording status."};
     }
     return {true, ""};
   }
@@ -131,7 +132,8 @@ private:
     }
 
     std::string output_file = "/tmp/recording.mcap";
-    writer_ = std::make_unique<Writer>(output_file, "ros1", request.compression_type, request.compression_level);
+    writer_ = std::make_unique<Writer>(output_file, "ros1", request.compression_type,
+                                       request.compression_level);
     COLOG_INFO("Initialized MCAP writer with file: %s", output_file.c_str());
 
     COLOG_INFO("Starting record for %zu topics", request.topics.size());
@@ -176,30 +178,33 @@ private:
           }
 
           const std::string topic_type = topic_iter->datatype;
-          const auto msgDesc = ros_type_info_provider_.getMessageDescription(topic_type);
-          writer_->add_schema(topic_type, SCHEMA_ENCODING, msgDesc->message_definition);
+          const auto msg_definition = message_definition_cache_.getMessageDefinition(topic_type);
+          writer_->add_schema(topic_type, SCHEMA_ENCODING, msg_definition);
           writer_->add_channel(topic_name, topic_type, MESSAGE_ENCODING);
-
-          auto subscription = this->nh_.subscribe<ros_babel_fish::BabelFishMessage>(
+          auto subscription = nh_.subscribe<topic_tools::ShapeShifter>(
             topic_name, SUBSCRIPTION_QUEUE_LENGTH,
-            [this, topic_name](
-            const ros::MessageEvent<ros_babel_fish::BabelFishMessage const> & msg_event) {
-              if (recording_status_ == RECORDING_STATUS::PAUSING) {
-                return;
-              }
-              const auto & msg = msg_event.getConstMessage();
-              const uint64_t timestamp = msg_event.getReceiptTime().toNSec();
+            [this, topic_name](const topic_tools::ShapeShifter::ConstPtr & msg) {
               if (writer_) {
+                const size_t len = msg->size();
+                std::vector<uint8_t> buffer(len);
+                ros::serialization::OStream stream(buffer.data(), len);
+                msg->write(stream);
+
+                const ros::Time t = ros::Time::now();
+                const uint64_t now_ns = static_cast<uint64_t>(t.sec) * 1000000000ULL
+                  + static_cast<uint64_t>(t.nsec);
+
                 if (const auto status = writer_->write_message(
-                  reinterpret_cast<const std::byte*>(msg->buffer()),
+                  reinterpret_cast<const std::byte*>(buffer.data()),
                   msg->size(),
                   topic_name,
-                  timestamp); !status.ok()) {
+                  now_ns); !status.ok()) {
                   ROS_WARN("Failed to write [%s] message: '%s'",
                            topic_name.c_str(), status.message.c_str());
                 }
               }
-            });
+            }
+          );
           subscribers_[topic_name] = subscription;
           it = pending_topics_.erase(it);
         } catch (const std::exception & e) {
@@ -257,7 +262,8 @@ private:
   RECORDING_STATUS recording_status_ = RECORDING_STATUS::FINISHED;
 
   std::unordered_map<std::string, ros::Subscriber> subscribers_;
-  ros_babel_fish::IntegratedDescriptionProvider ros_type_info_provider_;
+  // ros_babel_fish::IntegratedDescriptionProvider ros_type_info_provider_;
+  MsgDefinitionCache message_definition_cache_;
 
   std::vector<std::string> pending_topics_;
   std::thread subscription_retry_thread_;

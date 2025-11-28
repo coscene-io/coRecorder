@@ -1,0 +1,17 @@
+# Request message for caching recording configuration
+string task_id
+string start_callback_url   # Full URL for start recording callback (e.g., http://server/api/v1/collection-tasks/xxx/start-recording)
+string finish_callback_url  # Full URL for finish recording callback (e.g., http://server/api/v1/collection-tasks/xxx/finish-recording)
+string device_id
+string user_token           # User JWT token for authenticating callbacks to server
+string scene
+string[] skills             # Array of skills
+string organization
+string data_collector_id
+string[] topics
+int32 compression_level     # 0=fastest, 1=fast, 2=default, 3=slow, 4=slowest
+string compression_type     # "none", "lz4", "zstd"
+---
+# Response message
+bool success
+string message

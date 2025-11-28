@@ -139,7 +139,7 @@ private:
   std::string _name;
 };
 
-class MessageDefinitionCache final
+class MsgDefinitionCache final
 {
 public:
   std::pair<MessageDefinitionFormat, std::string> get_full_msg_text(
