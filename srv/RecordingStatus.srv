@@ -1,0 +1,17 @@
+# Request message for recording status
+string recording_id
+---
+# Response message
+bool success
+string message
+# status: "idle", "recording", "paused", "uploading", "finished", "cancelled"
+string status
+string scene
+string[] skills
+string organization
+string task_id
+string device_id
+string data_collector_id
+string[] active_topics
+int32 buffer_size_bytes
+int32 total_recorded_bytes
